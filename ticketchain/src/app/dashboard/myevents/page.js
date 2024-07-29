@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { createThirdwebClient, getContract, readContract } from "thirdweb";
+import { createThirdwebClient, getContract, readContract, prepareContractCall , sendTransaction} from "thirdweb";
 import { defineChain } from "thirdweb/chains";
 import { useActiveAccount } from "thirdweb/react";
 import {
@@ -12,14 +12,21 @@ import {
     Typography,
     Button,
     Badge,
+    Modal,
   } from "@material-tailwind/react";
   import { useRouter } from 'next/navigation';
   import Image from "next/image";
+  import { toast } from "react-toastify";
 
 const MyEvents = ({ accountDetails }) => {
   const [events, setEvents] = useState([]);
   const [eventImage, setEventImage] = useState(null);
   const router = useRouter();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedEventId, setSelectedEventId] = useState(null);
+  const [showBuyers, setShowBuyers] = useState(false);
+
+  const [ticketBuyers, setTicketBuyers] = useState([]);
 
   const account = useActiveAccount();
 
@@ -126,7 +133,105 @@ const MyEvents = ({ accountDetails }) => {
     router.push(`../search-event/${eventId}`);
   };
 
+  const fetchTicketBuyers = async (eventId) => {
+    try {
+      const contract = getContract({
+        client,
+        chain: defineChain(chainId),
+        address: contractAddress,
+      });
 
+      const totalTickets = 10; // Assume we want to fetch the first 10 tickets for simplicity
+      const ticketPromises = [];
+
+      for (let ticketId = 0; ticketId < totalTickets; ticketId++) {
+        ticketPromises.push(
+          readContract({
+            contract,
+            method: "function tickets(uint256) view returns (uint256 ticketId, uint256 eventId, address owner, bool used, string ticketImageIPFSHash)",
+            params: [ticketId],
+          })
+        );
+      }
+
+      const ticketData = await Promise.all(ticketPromises);
+      const buyers = ticketData
+        .filter(ticket => ticket[1].toString() === eventId) // Filter tickets by eventId
+        .map(ticket => ticket[2]); // Get the owner addresses
+
+      setTicketBuyers(buyers);
+      setSelectedEventId(eventId); // Set the selected event ID
+      setShowBuyers(true); // Show the buyers list
+    } catch (error) {
+      console.error("Failed to fetch ticket buyers:", error);
+    }
+  };
+
+  const approveAddress = async (to, tokenId) => {
+    try {
+      const contract = getContract({
+        client,
+        chain: defineChain(chainId),
+        address: contractAddress,
+      });
+
+      // Prepare the transaction for the approve function
+      const transaction = await prepareContractCall({
+        contract,
+        method: "function approve(address to, uint256 tokenId)",
+        params: [to, tokenId],
+      });
+
+      // Send the transaction
+      const { transactionHash } = await sendTransaction({
+        transaction,
+        account,
+      });
+      toast.success(
+        `Approval successful. Transaction Hash: ${transactionHash}`
+      );
+      console.log("Approval successful, transaction hash:", transactionHash);
+      // Optionally, you can show a success message or refresh the list of buyers
+    } catch (error) {
+      console.error("Approval failed:", error);
+      toast.error("Approval failed:", error);
+
+    }
+  };
+
+  const convertWeiToEth = (wei) => {
+    const eth = parseFloat(wei) / Math.pow(10, 18);
+    return eth;
+  };
+
+  const withdrawFunds = async (eventId) => {
+    try {
+      const contract = getContract({
+        client,
+        chain: defineChain(chainId),
+        address: contractAddress,
+      });
+
+      // Prepare the transaction for the withdraw function
+      const transaction = await prepareContractCall({
+        contract,
+        method: "function withdrawEventFunds(uint256 _eventId)",
+        params: [eventId],
+      });
+
+      // Send the transaction
+      const { transactionHash } = await sendTransaction({
+        transaction,
+        account,
+      });
+
+      console.log("Withdrawal successful, transaction hash:", transactionHash);
+      toast.success("Withdrawal successful, transaction hash:", transactionHash)
+    } catch (error) {
+      console.error("Withdrawal failed:", error)
+      toast.error("Withdrawal failed:", error)
+    }
+  };
   return (
     <div className="flex flex-col justify-center py-20">
            <h1 className="text-3xl text-center m-auto font-bold py-5">
@@ -179,10 +284,14 @@ const MyEvents = ({ accountDetails }) => {
               <Typography className=" text-right">Avail. Tickets</Typography>
 
               <Typography>{event.description}</Typography>
+              <span className="flex gap-2">
+              <Typography className="text-green-700 font-bold"> Funds: ETH {convertWeiToEth (event.funds)}</Typography>
+              <p onClick={() => withdrawFunds(event.eventId)} className="underline cursor-pointer">Withdraw</p>
+              </span>
               <Typography
                 variant="subtitle2"
                 color="gray"
-                className="mt-2 flex text-black font-bold"
+                className="mt-2 flex text-black "
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -203,7 +312,7 @@ const MyEvents = ({ accountDetails }) => {
               <Typography
                 variant="subtitle2"
                 color="gray"
-                className="flex text-black font-bold"
+                className="flex text-black "
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -236,8 +345,10 @@ const MyEvents = ({ accountDetails }) => {
                 View Event
               </Button>
               <Button
-                onClick={() => handleCardClick(event.eventId)}
                 className="bg-yellow-700 text-black"
+                onClick={() => {
+                  fetchTicketBuyers(event.eventId);
+                }}
               >
                 Sold Tickets
               </Button>
@@ -248,6 +359,29 @@ const MyEvents = ({ accountDetails }) => {
         <p>No events found for this account.</p>
       )}
       </div>
+      {showBuyers && (
+        <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/50 ">
+        <div className="bg-white rounded-lg p-6 w-2/5">
+          <h2 className="text-lg font-bold mb-4">Buyers for Event ID: {selectedEventId}</h2>
+          {ticketBuyers.length > 0 ? (
+            <ul>
+              {ticketBuyers.map((buyer, index) => (
+                <li key={index} className="border-b py-2">
+                  {buyer}
+                  <Button onClick={() => approveAddress(buyer, selectedEventId)} className="ml-4 bg-yellow-700 text-black">
+                    Approve
+                  </Button>
+                  </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No buyers found for this event.</p>
+          )}
+          <Button onClick={() => setShowBuyers(false)} className="mt-4">
+            Close
+          </Button>
+        </div></div>
+      )}
      </div>
   );
  

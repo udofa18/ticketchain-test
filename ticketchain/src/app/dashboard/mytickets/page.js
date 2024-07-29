@@ -6,7 +6,9 @@ import {
   createThirdwebClient,
   getContract,
   readContract,
+  prepareEvent,
   prepareContractCall,
+  getContractEvents,
   sendTransaction,
 } from "thirdweb";
 import { ThirdwebProvider } from "thirdweb/react";
@@ -39,6 +41,7 @@ const contractAddress = "0x24933eB4854f95285e54F641bb67D6C0D8bD6C91";
 const MyTicket = () => {
   const account = useActiveAccount();
   const router = useRouter();
+  const [events, setEvents] = useState([]);
 
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -46,58 +49,71 @@ const MyTicket = () => {
   const [recipientAddress, setRecipientAddress] = useState("");
   const [currentTicketId, setCurrentTicketId] = useState(null);
 
-    const fetchTicketData = async () => {
-      try {
-        const contract = getContract({
-          client,
-          chain: defineChain(chainId),
-          address: contractAddress,
-        });
+  const fetchTicketData = async () => {
+    try {
+      const contract = getContract({
+        client,
+        chain: defineChain(chainId),
+        address: contractAddress,
+      });
 
-        const totalTickets = 15; // Define the range of ticket IDs you want to fetch
-        const ticketPromises = [];
+      const totalTickets = 15; // Define the range of ticket IDs you want to fetch
+      const ticketPromises = [];
 
-        for (let ticketId = 0; ticketId < totalTickets; ticketId++) {
-          ticketPromises.push(
-            readContract({
-              contract,
-              method:
-                "function tickets(uint256) view returns (uint256 ticketId, uint256 eventId, address owner, bool used, string ticketImageIPFSHash)",
-              params: [ticketId],
-            })
-          );
-        }
-
-        const ticketData = await Promise.all(ticketPromises);
-
-        const formattedTicketData = ticketData.map((ticket) => {
-          return {
-            ticketId: ticket[0].toString(),
-            eventId: ticket[1].toString(),
-            owner: ticket[2].toLowerCase(),
-            used: ticket[3],
-            ticketImageIPFSHash: ticket[4],
-          };
-        });
-
-        // Optionally filter tickets by the account address
-        const filteredTickets = formattedTicketData.filter(
-          (ticket) =>
-            ticket.owner.toLocaleLowerCase() ===
-            account.address.toLocaleLowerCase()
+      for (let ticketId = 0; ticketId < totalTickets; ticketId++) {
+        ticketPromises.push(
+          readContract({
+            contract,
+            method:
+              "function tickets(uint256) view returns (uint256 ticketId, uint256 eventId, address owner, bool used, string ticketImageIPFSHash)",
+            params: [ticketId],
+          })
         );
-        setTickets(filteredTickets);
-      } catch (error) {
-        console.error("Failed to fetch tickets:", error);
       }
-    };
 
-    // fetchTicketData();
+      const ticketData = await Promise.all(ticketPromises);
+
+      const formattedTicketData = ticketData.map((ticket) => {
+        return {
+          ticketId: ticket[0].toString(),
+          eventId: ticket[1].toString(),
+          owner: ticket[2].toLowerCase(),
+          used: ticket[3],
+          ticketImageIPFSHash: ticket[4],
+        };
+      });
+
+      // Optionally filter tickets by the account address
+      const filteredTickets = formattedTicketData.filter(
+        (ticket) =>
+          ticket.owner.toLocaleLowerCase() ===
+          account.address.toLocaleLowerCase()
+      );
+      setTickets(filteredTickets);
+    } catch (error) {
+      console.error("Failed to fetch tickets:", error);
+    }
+  };
+
+  // fetchTicketData();
   // }, [account, client, contractAddress, chainId]);
 
   useEffect(() => {
     fetchTicketData();
   }, [account]);
+
+  const contract = getContract({
+    client,
+    chain: defineChain(chainId),
+    address: contractAddress,
+  });
+
+  useEffect(() => {
+   
+    if (contract && account) {
+      fetchTicketPurchasedEvents();
+    }
+  }, [contract, account]);
 
   const handleUseTicket = async (ticketId) => {
     setLoading(true);
@@ -145,7 +161,29 @@ const MyTicket = () => {
     }
   };
 
- const handleTransferTicket = async () => {
+  const fetchTicketPurchasedEvents = async () => {
+    try {
+      const preparedEvent = prepareEvent({
+        contract,
+        signature:
+          "event TicketPurchased(uint256 ticketId, uint256 eventId, address buyer, string ticketImageIPFSHash)",
+      });
+
+      const eventsData = await getContractEvents({
+        contract,
+        events: [preparedEvent],
+      });
+
+      setEvents(eventsData);
+    } catch (error) {
+      console.error("Failed to fetch events:", error);
+      toast.error("Failed to fetch events.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTransferTicket = async () => {
     setLoading(true);
     try {
       const contract = getContract({
@@ -156,7 +194,8 @@ const MyTicket = () => {
 
       const transaction = prepareContractCall({
         contract,
-        method: "function transferFrom(address from, address to, uint256 tokenId)",
+        method:
+          "function transferFrom(address from, address to, uint256 tokenId)",
         params: [account.address, recipientAddress, currentTicketId],
       });
 
@@ -167,7 +206,9 @@ const MyTicket = () => {
 
       if (transactionHash) {
         console.log(`Transfer transaction hash: ${transactionHash}`);
-        toast.success(`Ticket ${currentTicketId} has been transferred. Transaction Hash: ${transactionHash}`);
+        toast.success(
+          `Ticket ${currentTicketId} has been transferred. Transaction Hash: ${transactionHash}`
+        );
         // Optionally refresh the ticket data after transfer
         await fetchTicketData();
         setIsModalOpen(false); // Close the modal
@@ -234,8 +275,6 @@ const MyTicket = () => {
                     >
                       Use Tickeet
                     </Button>{" "}
-
-
                     <Button
                       variant="text"
                       className="flex items-center gap-2"
@@ -261,8 +300,6 @@ const MyTicket = () => {
                       </svg>
                     </Button>
                   </Typography>
-
-          
                 </CardBody>
               </Card>
               <p></p>
@@ -272,44 +309,45 @@ const MyTicket = () => {
         ) : (
           <p>No tickets found for this account.</p>
         )}
+
+       
       </div>
 
       {isModalOpen && (
-  <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/50 ">
-    <div className="bg-white rounded-lg p-6 w-96">
-      <h2 className="text-lg font-bold mb-4">Transfer Ticket</h2>
-      <label className="block mb-2">Recipient Address:</label>
-      <input
-        type="text"
-        value={recipientAddress}
-        onChange={(e) => setRecipientAddress(e.target.value)}
-        className="border border-gray-300 rounded-md p-2 mb-4 w-full"
-        placeholder="Enter recipient address"
-      />
-      <div className="flex justify-between">
-        <Button
-          variant="contained"
-          color="primary"
-          onClick={handleTransferTicket}
-          disabled={!recipientAddress || loading}
-        >
-          Transfer
-        </Button>
-        <Button
-          variant="outlined"
-          color="red"
-          onClick={() => {
-            setIsModalOpen(false); // Close the modal
-            setRecipientAddress(""); // Reset recipient address
-          }}
-        >
-          Cancel
-        </Button>
-      </div>
-    </div>
-  </div>
-)}
-
+        <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/50 ">
+          <div className="bg-white rounded-lg p-6 w-96">
+            <h2 className="text-lg font-bold mb-4">Transfer Ticket</h2>
+            <label className="block mb-2">Recipient Address:</label>
+            <input
+              type="text"
+              value={recipientAddress}
+              onChange={(e) => setRecipientAddress(e.target.value)}
+              className="border border-gray-300 rounded-md p-2 mb-4 w-full"
+              placeholder="Enter recipient address"
+            />
+            <div className="flex justify-between">
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleTransferTicket}
+                disabled={!recipientAddress || loading}
+              >
+                Transfer
+              </Button>
+              <Button
+                variant="outlined"
+                color="red"
+                onClick={() => {
+                  setIsModalOpen(false); // Close the modal
+                  setRecipientAddress(""); // Reset recipient address
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
